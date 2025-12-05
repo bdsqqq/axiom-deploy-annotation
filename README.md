@@ -1,8 +1,10 @@
 # axiom-deploy-annotation
 
-nix flake that creates [axiom](https://axiom.co) annotations after every nixos/nix-darwin rebuild.
+[axiom](https://axiom.co) annotations after every nixos/nix-darwin rebuild.
 
-annotations appear on your axiom dashboards, marking when deployments happened with commit hash, generation number, and store path.
+<img width="1138" height="803" alt="" src="https://github.com/user-attachments/assets/c0f07019-eb86-4b44-9227-5564737af326" />
+
+annotations appear on charts across the axiom app, marking when deployments happened with commit hash, generation number, and store path.
 
 ## usage
 
