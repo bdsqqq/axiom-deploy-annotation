@@ -144,21 +144,11 @@ in
       '')
     ];
     
-    launchd.daemons.axiom-deploy-annotation = {
-      script = ''
-        for i in $(seq 1 30); do
-          [ -f "${cfg.tokenPath}" ] && break
-          sleep 1
-        done
-        exec ${annotateScript}
-      '';
-      serviceConfig = {
-        Label = "co.axiom.deploy-annotation";
-        RunAtLoad = true;
-        KeepAlive = false;
-        StandardOutPath = "/var/log/axiom-deploy-annotation.log";
-        StandardErrorPath = "/var/log/axiom-deploy-annotation.log";
-      };
-    };
+    # Run annotation script on every darwin-rebuild switch
+    # This runs as root during activation, after secrets are available
+    system.activationScripts.postActivation.text = ''
+      echo "axiom-deploy-annotation: running post-activation hook..."
+      ${annotateScript} >> /var/log/axiom-deploy-annotation.log 2>&1 || true
+    '';
   };
 }
