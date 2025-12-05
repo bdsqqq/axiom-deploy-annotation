@@ -13,7 +13,10 @@ let
     STATE_DIR="${stateDir}"
     STATE_FILE="$STATE_DIR/last-generation"
 
-    mkdir -p "$STATE_DIR"
+    if [[ "$AXIOM_API" != https://* ]]; then
+      echo "axiom-deploy-annotate: refusing non-HTTPS apiEndpoint ($AXIOM_API)" >&2
+      exit 1
+    fi
 
     if [[ ! -f "$AXIOM_TOKEN_PATH" ]]; then
       echo "axiom-deploy-annotate: token not found at $AXIOM_TOKEN_PATH, skipping"
@@ -37,7 +40,7 @@ let
       fi
     fi
 
-    AXIOM_TOKEN="$(cat "$AXIOM_TOKEN_PATH")"
+    AXIOM_TOKEN="$(tr -d '\r\n' < "$AXIOM_TOKEN_PATH")"
     HOSTNAME="$(hostname -s)"
     TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
     STORE_PATH="$(readlink -f "$PROFILE_PATH")"
@@ -72,10 +75,18 @@ let
 EOF
     )
 
+    # create temp netrc file for curl (avoids token in ps output)
+    NETRC_FILE=$(mktemp)
+    trap 'rm -f "$NETRC_FILE"' EXIT
+    chmod 600 "$NETRC_FILE"
+    # extract hostname from API URL for netrc
+    API_HOST=$(echo "$AXIOM_API" | sed -E 's|https://([^/]+).*|\1|')
+    echo "machine $API_HOST login bearer password $AXIOM_TOKEN" > "$NETRC_FILE"
+
     RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$AXIOM_API" \
-      -H "Authorization: Bearer $AXIOM_TOKEN" \
+      --netrc-file "$NETRC_FILE" \
       -H "Content-Type: application/json" \
-      -d "$PAYLOAD" 2>&1) || true
+      -d "$PAYLOAD") || true
 
     HTTP_CODE=$(echo "$RESPONSE" | tail -1)
 
@@ -140,13 +151,32 @@ in
       after = [ "network-online.target" ];
       wants = [ "network-online.target" ];
       
-      path = with pkgs; [ coreutils gnugrep curl jq nettools ];
+      path = with pkgs; [ coreutils gnugrep gnused curl jq nettools ];
       
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
         ExecStart = annotateScript;
         StateDirectory = "axiom-deploy-annotation";
+        StateDirectoryMode = "0750";
+        
+        # security hardening
+        NoNewPrivileges = true;
+        PrivateTmp = true;
+        ProtectSystem = "strict";
+        ProtectHome = true;
+        ProtectKernelTunables = true;
+        ProtectKernelModules = true;
+        ProtectControlGroups = true;
+        LockPersonality = true;
+        PrivateDevices = true;
+        RestrictSUIDSGID = true;
+        RestrictRealtime = true;
+        RestrictAddressFamilies = [ "AF_INET" "AF_INET6" ];
+        CapabilityBoundingSet = "";
+        # allow reading secrets and state
+        ReadOnlyPaths = [ "/" ];
+        ReadWritePaths = [ "/var/lib/axiom-deploy-annotation" ];
       };
     };
   };
