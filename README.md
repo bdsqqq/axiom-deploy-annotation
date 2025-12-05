@@ -2,7 +2,11 @@
 
 [axiom](https://axiom.co) annotations after every nixos/nix-darwin rebuild.
 
-<img width="1138" height="803" alt="" src="https://github.com/user-attachments/assets/c0f07019-eb86-4b44-9227-5564737af326" />
+<picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/c3ba6b6f-50ca-41f9-8c56-6d4fc50403d0" />
+    <source media="(prefers-color-scheme: light)" srcset="https://github.com/user-attachments/assets/6c20d9a3-e050-4cea-ad90-003119b67bf3" />
+    <img alt="" src="https://github.com/user-attachments/assets/6c20d9a3-e050-4cea-ad90-003119b67bf3" />
+</picture>
 
 annotations appear on charts across the axiom app, marking when deployments happened with commit hash, generation number, and store path.
 
