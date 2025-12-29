@@ -31,9 +31,11 @@ annotations appear on charts across the axiom app, marking when deployments happ
   
   services.axiom-deploy-annotation = {
     enable = true;
-    tokenPath = "/run/secrets/axiom_token";  # path to your axiom api token
-    datasets = [ "logs" "metrics" ];          # datasets to attach annotation to
-    repositoryUrl = "https://github.com/you/your-dots";  # for commit links
+    tokenPath = config.sops.secrets.axiom_token.path;  # or any path readable by 'user'
+    datasets = [ "logs" "metrics" ];
+    repositoryUrl = "https://github.com/you/your-dots";
+    user = "youruser";   # service runs as this user
+    group = "users";     # service runs as this group
   };
 }
 ```
@@ -46,7 +48,7 @@ annotations appear on charts across the axiom app, marking when deployments happ
   
   services.axiom-deploy-annotation = {
     enable = true;
-    tokenPath = "/run/secrets/axiom_token";
+    tokenPath = config.sops.secrets.axiom_token.path;
     datasets = [ "logs" "metrics" ];
     repositoryUrl = "https://github.com/you/your-dots";
   };
@@ -54,6 +56,8 @@ annotations appear on charts across the axiom app, marking when deployments happ
 ```
 
 ## options
+
+### common options (nixos + darwin)
 
 | option | type | default | description |
 |--------|------|---------|-------------|
@@ -64,15 +68,24 @@ annotations appear on charts across the axiom app, marking when deployments happ
 | `annotationType` | string | `"nix-deploy"` | type field for the annotation |
 | `repositoryUrl` | string or null | `null` | github/gitlab url for commit links |
 
+### nixos-only options
+
+| option | type | default | description |
+|--------|------|---------|-------------|
+| `user` | string | `"root"` | user to run the service as. tokenPath must be readable by this user |
+| `group` | string | `"root"` | group to run the service as |
+
+the service runs with aggressive systemd hardening (`CapabilityBoundingSet=""`, `ProtectSystem=strict`, etc). this means it can only read files owned by the configured user—even when running as root. set `user` to match your secret ownership.
+
 ## how it works
 
 ### nixos
 
-uses a systemd oneshot service with `restartTriggers = [ config.system.configurationRevision ]`. the service restarts AFTER activation completes, when `/run/current-system` points to the new system. this avoids issues with background processes getting killed during activation.
+systemd oneshot service with `restartTriggers = [ config.system.configurationRevision ]`. the service restarts after activation completes, when `/run/current-system` points to the new system.
 
 ### nix-darwin
 
-uses a launchd daemon with `RunAtLoad = true`. the daemon gets reloaded when the plist changes (which happens when the script store path changes).
+activation script hook that runs during `darwin-rebuild switch`. executes as root during the activation phase.
 
 ## requirements
 
