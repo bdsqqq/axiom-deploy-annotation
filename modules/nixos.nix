@@ -133,6 +133,18 @@ in
       example = "https://github.com/user/repo";
       description = "GitHub/GitLab repository URL for commit links";
     };
+    
+    user = lib.mkOption {
+      type = lib.types.str;
+      default = "root";
+      description = "User to run the service as. The tokenPath must be readable by this user.";
+    };
+    
+    group = lib.mkOption {
+      type = lib.types.str;
+      default = "root";
+      description = "Group to run the service as.";
+    };
   };
   
   config = lib.mkIf cfg.enable {
@@ -157,6 +169,8 @@ in
         Type = "oneshot";
         RemainAfterExit = true;
         ExecStart = annotateScript;
+        User = cfg.user;
+        Group = cfg.group;
         StateDirectory = "axiom-deploy-annotation";
         StateDirectoryMode = "0750";
         
