@@ -5,24 +5,61 @@ let
   cfg = config.services.axiom-deploy-annotation;
   stateDir = "/var/lib/axiom-deploy-annotation";
   
+  # use configPath if provided, otherwise fall back to tokenPath (deprecated)
+  useTomlConfig = cfg.configPath != null;
+  configSection = cfg.dataset;
+  dasel = "${pkgs.dasel}/bin/dasel";
+  
   annotateScript = pkgs.writeShellScript "axiom-deploy-annotate" ''
     set -euo pipefail
 
-    AXIOM_TOKEN_PATH="${cfg.tokenPath}"
-    AXIOM_API="${cfg.apiEndpoint}"
     STATE_DIR="${stateDir}"
     STATE_FILE="$STATE_DIR/last-generation"
+
+    install -d -m 0750 "$STATE_DIR" 2>/dev/null || true
+
+    ${if useTomlConfig then ''
+    # parse toml config using dasel
+    CONFIG_PATH="${cfg.configPath}"
+    CONFIG_SECTION="${configSection}"
+    
+    if [[ ! -f "$CONFIG_PATH" ]]; then
+      echo "axiom-deploy-annotate: config not found at $CONFIG_PATH, skipping"
+      exit 0
+    fi
+    
+    AXIOM_API_BASE=$(${dasel} -f "$CONFIG_PATH" ".$CONFIG_SECTION.url" 2>/dev/null || echo "")
+    AXIOM_TOKEN=$(${dasel} -f "$CONFIG_PATH" ".$CONFIG_SECTION.token" 2>/dev/null || echo "")
+    AXIOM_ORG_ID=$(${dasel} -f "$CONFIG_PATH" ".$CONFIG_SECTION.org_id" 2>/dev/null || echo "")
+    
+    if [[ -z "$AXIOM_TOKEN" ]]; then
+      echo "axiom-deploy-annotate: token not found in config for section '$CONFIG_SECTION', skipping"
+      exit 0
+    fi
+    
+    if [[ -z "$AXIOM_API_BASE" ]]; then
+      AXIOM_API_BASE="https://api.axiom.co"
+    fi
+    
+    AXIOM_API="''${AXIOM_API_BASE}/v2/annotations"
+    '' else ''
+    # deprecated: using tokenPath
+    echo "axiom-deploy-annotate: WARNING: tokenPath is deprecated, use configPath instead" >&2
+    
+    AXIOM_TOKEN_PATH="${cfg.tokenPath}"
+    AXIOM_API="${cfg.apiEndpoint}"
+    
+    if [[ ! -f "$AXIOM_TOKEN_PATH" ]]; then
+      echo "axiom-deploy-annotate: token not found at $AXIOM_TOKEN_PATH, skipping"
+      exit 0
+    fi
+    
+    AXIOM_TOKEN="$(tr -d '\r\n' < "$AXIOM_TOKEN_PATH")"
+    ''}
 
     if [[ "$AXIOM_API" != https://* ]]; then
       echo "axiom-deploy-annotate: refusing non-HTTPS apiEndpoint ($AXIOM_API)" >&2
       exit 1
-    fi
-
-    install -d -m 0750 "$STATE_DIR" 2>/dev/null || true
-
-    if [[ ! -f "$AXIOM_TOKEN_PATH" ]]; then
-      echo "axiom-deploy-annotate: token not found at $AXIOM_TOKEN_PATH, skipping"
-      exit 0
     fi
 
     PROFILE_PATH="/nix/var/nix/profiles/system"
@@ -42,7 +79,6 @@ let
       fi
     fi
 
-    AXIOM_TOKEN="$(tr -d '\r\n' < "$AXIOM_TOKEN_PATH")"
     HOSTNAME="$(hostname -s)"
     TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
     STORE_PATH="$(readlink -f "$PROFILE_PATH")"
@@ -88,6 +124,7 @@ EOF
     RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$AXIOM_API" \
       --netrc-file "$NETRC_FILE" \
       -H "Content-Type: application/json" \
+      ${lib.optionalString useTomlConfig ''-H "X-Axiom-Org-Id: $AXIOM_ORG_ID" \''}
       -d "$PAYLOAD") || true
 
     HTTP_CODE=$(echo "$RESPONSE" | tail -1)
@@ -104,16 +141,50 @@ in
   options.services.axiom-deploy-annotation = {
     enable = lib.mkEnableOption "Axiom deploy annotations";
     
+    configPath = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      example = "/run/secrets/axiom.toml";
+      description = ''
+        Path to Axiom TOML config file. Takes precedence over tokenPath.
+        
+        Expected format:
+        ```toml
+        [deployments]
+        url = "https://api.axiom.co"  # optional, defaults to https://api.axiom.co
+        token = "xaat-..."
+        org_id = "my-org"
+        ```
+        
+        For edge deployments, use the appropriate ingest URL:
+        - US East 1: https://us-east-1.aws.edge.axiom.co
+        - EU Central 1: https://eu-central-1.aws.edge.axiom.co
+      '';
+    };
+    
+    dataset = lib.mkOption {
+      type = lib.types.str;
+      default = "default";
+      example = "deployments";
+      description = "Dataset name / section key in the TOML config (e.g., 'deployments' for [deployments])";
+    };
+    
     tokenPath = lib.mkOption {
       type = lib.types.path;
       default = "/run/secrets/axiom_token";
-      description = "Path to file containing the Axiom API token";
+      description = ''
+        Path to file containing the Axiom API token.
+        DEPRECATED: Use configPath instead.
+      '';
     };
     
     apiEndpoint = lib.mkOption {
       type = lib.types.str;
       default = "https://api.axiom.co/v2/annotations";
-      description = "Axiom API endpoint for annotations";
+      description = ''
+        Axiom API endpoint for annotations.
+        Only used with tokenPath (deprecated). configPath extracts URL from TOML.
+      '';
     };
     
     datasets = lib.mkOption {
