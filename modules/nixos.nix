@@ -26,9 +26,10 @@ let
       exit 0
     fi
     
-    AXIOM_API_BASE=$(${dasel} -f "$CONFIG_PATH" ".$CONFIG_SECTION.url" 2>/dev/null || echo "")
-    AXIOM_TOKEN=$(${dasel} -f "$CONFIG_PATH" ".$CONFIG_SECTION.token" 2>/dev/null || echo "")
-    AXIOM_ORG_ID=$(${dasel} -f "$CONFIG_PATH" ".$CONFIG_SECTION.org_id" 2>/dev/null || echo "")
+    # dasel v3.x removed -f flag, uses stdin piping instead
+    AXIOM_API_BASE=$(${dasel} -i toml ".$CONFIG_SECTION.url" < "$CONFIG_PATH" 2>/dev/null || echo "")
+    AXIOM_TOKEN=$(${dasel} -i toml ".$CONFIG_SECTION.token" < "$CONFIG_PATH" 2>/dev/null || echo "")
+    AXIOM_ORG_ID=$(${dasel} -i toml ".$CONFIG_SECTION.org_id" < "$CONFIG_PATH" 2>/dev/null || echo "")
     
     if [[ -z "$AXIOM_TOKEN" ]]; then
       echo "axiom-deploy-annotate: token not found in config for section '$CONFIG_SECTION', skipping"
