@@ -4,149 +4,153 @@
 let
   cfg = config.services.axiom-deploy-annotation;
   stateDir = "/var/lib/axiom-deploy-annotation";
-  
+
   # use configPath if provided, otherwise fall back to tokenPath (deprecated)
   useTomlConfig = cfg.configPath != null;
   configSection = cfg.dataset;
   dasel = "${pkgs.dasel}/bin/dasel";
-  
+
   annotateScript = pkgs.writeShellScript "axiom-deploy-annotate" ''
-    set -euo pipefail
+        set -euo pipefail
 
-    STATE_DIR="${stateDir}"
-    STATE_FILE="$STATE_DIR/last-generation"
+        STATE_DIR="${stateDir}"
+        STATE_FILE="$STATE_DIR/last-generation"
 
-    ${if useTomlConfig then ''
-    # parse toml config using dasel
-    CONFIG_PATH="${cfg.configPath}"
-    CONFIG_SECTION="${configSection}"
-    
-    if [[ ! -f "$CONFIG_PATH" ]]; then
-      echo "axiom-deploy-annotate: config not found at $CONFIG_PATH, skipping"
-      exit 0
-    fi
-    
-    # dasel v3.x removed -f flag, uses stdin piping instead
-    AXIOM_API_BASE=$(${dasel} -i toml ".$CONFIG_SECTION.url" < "$CONFIG_PATH" 2>/dev/null || echo "")
-    AXIOM_TOKEN=$(${dasel} -i toml ".$CONFIG_SECTION.token" < "$CONFIG_PATH" 2>/dev/null || echo "")
-    AXIOM_ORG_ID=$(${dasel} -i toml ".$CONFIG_SECTION.org_id" < "$CONFIG_PATH" 2>/dev/null || echo "")
-    
-    if [[ -z "$AXIOM_TOKEN" ]]; then
-      echo "axiom-deploy-annotate: token not found in config for section '$CONFIG_SECTION', skipping"
-      exit 0
-    fi
-    
-    if [[ -z "$AXIOM_API_BASE" ]]; then
-      AXIOM_API_BASE="https://api.axiom.co"
-    fi
-    
-    AXIOM_API="''${AXIOM_API_BASE}/v2/annotations"
-    '' else ''
-    # deprecated: using tokenPath
-    echo "axiom-deploy-annotate: WARNING: tokenPath is deprecated, use configPath instead" >&2
-    
-    AXIOM_TOKEN_PATH="${cfg.tokenPath}"
-    AXIOM_API="${cfg.apiEndpoint}"
-    
-    if [[ ! -f "$AXIOM_TOKEN_PATH" ]]; then
-      echo "axiom-deploy-annotate: token not found at $AXIOM_TOKEN_PATH, skipping"
-      exit 0
-    fi
-    
-    AXIOM_TOKEN="$(tr -d '\r\n' < "$AXIOM_TOKEN_PATH")"
-    ''}
+        ${if useTomlConfig then ''
+        # parse toml config using dasel
+        CONFIG_PATH="${cfg.configPath}"
+        CONFIG_SECTION="${configSection}"
 
-    if [[ "$AXIOM_API" != https://* ]]; then
-      echo "axiom-deploy-annotate: refusing non-HTTPS apiEndpoint ($AXIOM_API)" >&2
-      exit 1
-    fi
+        if [[ ! -f "$CONFIG_PATH" ]]; then
+          echo "axiom-deploy-annotate: config not found at $CONFIG_PATH, skipping"
+          exit 0
+        fi
 
-    PROFILE_PATH="/nix/var/nix/profiles/system"
+        # dasel v3.x removed -f flag, uses stdin piping instead
+        AXIOM_API_BASE=$(${dasel} -i toml ".$CONFIG_SECTION.url" < "$CONFIG_PATH" 2>/dev/null || echo "")
+        AXIOM_TOKEN=$(${dasel} -i toml ".$CONFIG_SECTION.token" < "$CONFIG_PATH" 2>/dev/null || echo "")
+        AXIOM_ORG_ID=$(${dasel} -i toml ".$CONFIG_SECTION.org_id" < "$CONFIG_PATH" 2>/dev/null || echo "")
 
-    if [[ ! -L "$PROFILE_PATH" ]]; then
-      echo "axiom-deploy-annotate: system profile not found, skipping"
-      exit 0
-    fi
+        if [[ -z "$AXIOM_TOKEN" ]]; then
+          echo "axiom-deploy-annotate: token not found in config for section '$CONFIG_SECTION', skipping"
+          exit 0
+        fi
 
-    CURRENT_GEN="$(readlink "$PROFILE_PATH" | grep -oE '[0-9]+' | tail -1)"
-    
-    if [[ -f "$STATE_FILE" ]]; then
-      LAST_GEN="$(cat "$STATE_FILE")"
-      if [[ "$CURRENT_GEN" == "$LAST_GEN" ]]; then
-        echo "axiom-deploy-annotate: gen $CURRENT_GEN already annotated, skipping"
-        exit 0
-      fi
-    fi
+        if [[ -z "$AXIOM_API_BASE" ]]; then
+          AXIOM_API_BASE="https://api.axiom.co"
+        fi
 
-    HOSTNAME="$(hostname -s)"
-    TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-    STORE_PATH="$(readlink -f "$PROFILE_PATH")"
-    
-    GIT_REV=""
-    if [[ -x "/run/current-system/sw/bin/nixos-version" ]]; then
-      GIT_REV="$(/run/current-system/sw/bin/nixos-version --configuration-revision 2>/dev/null)" || true
-    fi
-    GIT_REV="''${GIT_REV%-dirty}"
-    GIT_REV_SHORT="''${GIT_REV:0:7}"
+        AXIOM_API="''${AXIOM_API_BASE}/v2/annotations"
+        '' else ''
+        # deprecated: using tokenPath
+        echo "axiom-deploy-annotate: WARNING: tokenPath is deprecated, use configPath instead" >&2
 
-    echo "axiom-deploy-annotate: creating annotation for $HOSTNAME gen $CURRENT_GEN ($GIT_REV_SHORT)..."
+        AXIOM_TOKEN_PATH="${cfg.tokenPath}"
+        AXIOM_API="${cfg.apiEndpoint}"
 
-    DATASETS_JSON='${builtins.toJSON cfg.datasets}'
-    
-    ${lib.optionalString (cfg.repositoryUrl != null) ''
-    URL=""
-    if [[ -n "$GIT_REV" ]]; then
-      URL="${cfg.repositoryUrl}/commit/$GIT_REV"
-    fi
-    ''}
+        if [[ ! -f "$AXIOM_TOKEN_PATH" ]]; then
+          echo "axiom-deploy-annotate: token not found at $AXIOM_TOKEN_PATH, skipping"
+          exit 0
+        fi
 
-    PAYLOAD=$(cat <<EOF
-{
-  "time": "$TIMESTAMP",
-  "type": "${cfg.annotationType}",
-  "datasets": $DATASETS_JSON,
-  "title": "$HOSTNAME gen $CURRENT_GEN''${GIT_REV_SHORT:+ ($GIT_REV_SHORT)}",
-  "description": "nix generation $CURRENT_GEN deployed to $HOSTNAME\n\ncommit: $GIT_REV\nstore path: $STORE_PATH"${lib.optionalString (cfg.repositoryUrl != null) '',
-  "url": "$URL"''}
-}
-EOF
-    )
+        AXIOM_TOKEN="$(tr -d '\r\n' < "$AXIOM_TOKEN_PATH")"
+        ''}
 
-    # create temp netrc file for curl (avoids token in ps output)
-    NETRC_FILE=$(mktemp)
-    trap 'rm -f "$NETRC_FILE"' EXIT
-    chmod 600 "$NETRC_FILE"
-    # extract hostname from API URL for netrc
-    API_HOST=$(echo "$AXIOM_API" | sed -E 's|https://([^/]+).*|\1|')
-    echo "machine $API_HOST login bearer password $AXIOM_TOKEN" > "$NETRC_FILE"
+        if [[ "$AXIOM_API" != https://* ]]; then
+          echo "axiom-deploy-annotate: refusing non-HTTPS apiEndpoint ($AXIOM_API)" >&2
+          exit 1
+        fi
 
-    RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$AXIOM_API" \
-      --netrc-file "$NETRC_FILE" \
-      -H "Content-Type: application/json" \
-      ${lib.optionalString useTomlConfig ''-H "X-Axiom-Org-Id: $AXIOM_ORG_ID" \''}
-      -d "$PAYLOAD") || true
+        PROFILE_PATH="/nix/var/nix/profiles/system"
 
-    HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+        if [[ ! -L "$PROFILE_PATH" ]]; then
+          echo "axiom-deploy-annotate: system profile not found, skipping"
+          exit 0
+        fi
 
-    if [[ "$HTTP_CODE" -ge 200 && "$HTTP_CODE" -lt 300 ]]; then
-      echo "$CURRENT_GEN" > "$STATE_FILE"
-      echo "axiom-deploy-annotate: annotation created for $HOSTNAME gen $CURRENT_GEN"
-    else
-      echo "axiom-deploy-annotate: axiom api returned $HTTP_CODE (non-fatal)"
-    fi
+        CURRENT_GEN="$(readlink "$PROFILE_PATH" | grep -oE '[0-9]+' | tail -1)"
+
+        if [[ -f "$STATE_FILE" ]]; then
+          LAST_GEN="$(cat "$STATE_FILE")"
+          if [[ "$CURRENT_GEN" == "$LAST_GEN" ]]; then
+            echo "axiom-deploy-annotate: gen $CURRENT_GEN already annotated, skipping"
+            exit 0
+          fi
+        fi
+
+        HOSTNAME="$(hostname -s)"
+        TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+        STORE_PATH="$(readlink -f "$PROFILE_PATH")"
+
+        GIT_REV=""
+        if [[ -x "/run/current-system/sw/bin/nixos-version" ]]; then
+          GIT_REV="$(/run/current-system/sw/bin/nixos-version --configuration-revision 2>/dev/null)" || true
+        fi
+        GIT_REV="''${GIT_REV%-dirty}"
+        GIT_REV_SHORT="''${GIT_REV:0:7}"
+
+        echo "axiom-deploy-annotate: creating annotation for $HOSTNAME gen $CURRENT_GEN ($GIT_REV_SHORT)..."
+
+        DATASETS_JSON='${builtins.toJSON cfg.datasets}'
+
+        ${lib.optionalString (cfg.repositoryUrl != null) ''
+        URL=""
+        if [[ -n "$GIT_REV" ]]; then
+          URL="${cfg.repositoryUrl}/commit/$GIT_REV"
+        fi
+        ''}
+
+        PAYLOAD=$(cat <<EOF
+    {
+      "time": "$TIMESTAMP",
+      "type": "${cfg.annotationType}",
+      "datasets": $DATASETS_JSON,
+      "title": "$HOSTNAME gen $CURRENT_GEN''${GIT_REV_SHORT:+ ($GIT_REV_SHORT)}",
+      "description": "nix generation $CURRENT_GEN deployed to $HOSTNAME\n\ncommit: $GIT_REV\nstore path: $STORE_PATH"${lib.optionalString (cfg.repositoryUrl != null) '',
+      "url": "$URL"''}
+    }
+    EOF
+        )
+
+        # create temp netrc file for curl (avoids token in ps output)
+        NETRC_FILE=$(mktemp)
+        trap 'rm -f "$NETRC_FILE"' EXIT
+        chmod 600 "$NETRC_FILE"
+        # extract hostname from API URL for netrc
+        API_HOST=$(echo "$AXIOM_API" | sed -E 's|https://([^/]+).*|\1|')
+        echo "machine $API_HOST login bearer password $AXIOM_TOKEN" > "$NETRC_FILE"
+
+        CURL_HEADERS=(-H "Content-Type: application/json")
+        if [[ -n "''${AXIOM_ORG_ID:-}" ]]; then
+          CURL_HEADERS+=(-H "X-Axiom-Org-Id: $AXIOM_ORG_ID")
+        fi
+
+        RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$AXIOM_API" \
+          --netrc-file "$NETRC_FILE" \
+          "''${CURL_HEADERS[@]}" \
+          -d "$PAYLOAD") || true
+
+        HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+
+        if [[ "$HTTP_CODE" -ge 200 && "$HTTP_CODE" -lt 300 ]]; then
+          echo "$CURRENT_GEN" > "$STATE_FILE"
+          echo "axiom-deploy-annotate: annotation created for $HOSTNAME gen $CURRENT_GEN"
+        else
+          echo "axiom-deploy-annotate: axiom api returned $HTTP_CODE (non-fatal)"
+        fi
   '';
 in
 {
   options.services.axiom-deploy-annotation = {
     enable = lib.mkEnableOption "Axiom deploy annotations";
-    
+
     configPath = lib.mkOption {
       type = lib.types.nullOr lib.types.path;
       default = null;
       example = "/run/secrets/axiom.toml";
       description = ''
         Path to Axiom TOML config file. Takes precedence over tokenPath.
-        
+
         Expected format:
         ```toml
         [deployments]
@@ -154,20 +158,20 @@ in
         token = "xaat-..."
         org_id = "my-org"
         ```
-        
+
         For edge deployments, use the appropriate ingest URL:
         - US East 1: https://us-east-1.aws.edge.axiom.co
         - EU Central 1: https://eu-central-1.aws.edge.axiom.co
       '';
     };
-    
+
     dataset = lib.mkOption {
       type = lib.types.str;
       default = "default";
       example = "deployments";
       description = "Dataset name / section key in the TOML config (e.g., 'deployments' for [deployments])";
     };
-    
+
     tokenPath = lib.mkOption {
       type = lib.types.path;
       default = "/run/secrets/axiom_token";
@@ -176,7 +180,7 @@ in
         DEPRECATED: Use configPath instead.
       '';
     };
-    
+
     apiEndpoint = lib.mkOption {
       type = lib.types.str;
       default = "https://api.axiom.co/v2/annotations";
@@ -185,58 +189,58 @@ in
         Only used with tokenPath (deprecated). configPath extracts URL from TOML.
       '';
     };
-    
+
     datasets = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ "deployments" ];
       example = [ "logs" "metrics" ];
       description = "Axiom datasets to attach the annotation to";
     };
-    
+
     annotationType = lib.mkOption {
       type = lib.types.str;
       default = "nix-deploy";
       description = "Type field for the annotation";
     };
-    
+
     repositoryUrl = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
       example = "https://github.com/user/repo";
       description = "GitHub/GitLab repository URL for commit links";
     };
-    
+
     user = lib.mkOption {
       type = lib.types.str;
       default = "root";
       description = "User to run the service as. The configPath/tokenPath must be readable by this user.";
     };
-    
+
     group = lib.mkOption {
       type = lib.types.str;
       default = "root";
       description = "Group to run the service as.";
     };
   };
-  
+
   config = lib.mkIf cfg.enable {
     environment.systemPackages = [
       (pkgs.writeShellScriptBin "axiom-deploy-annotate" ''
         exec ${annotateScript}
       '')
     ];
-    
+
     systemd.services.axiom-deploy-annotation = {
       description = "Create Axiom annotation after NixOS rebuild";
       wantedBy = [ "multi-user.target" ];
-      
+
       restartTriggers = [ config.system.configurationRevision ];
-      
+
       after = [ "network-online.target" ];
       wants = [ "network-online.target" ];
-      
+
       path = with pkgs; [ coreutils gnugrep gnused curl jq nettools dasel ];
-      
+
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
@@ -245,7 +249,7 @@ in
         Group = cfg.group;
         StateDirectory = "axiom-deploy-annotation";
         StateDirectoryMode = "0750";
-        
+
         # security hardening
         NoNewPrivileges = true;
         PrivateTmp = true;
